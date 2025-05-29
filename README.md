@@ -1,168 +1,214 @@
-Order Matching System
-A simplified stock exchange order matching system implemented in Go with a MySQL backend.
-Features
+# Order Matching System
 
-Supports limit and market orders for buy and sell sides
-Price-time priority matching algorithm
-RESTful API with JSON endpoints
-MySQL persistence with raw SQL
-Structured logging with Zap
-Environment-based configuration
+A high-performance order matching engine built with Go, implementing a limit order book with support for limit and market orders.
 
-Prerequisites
+## Features
 
-Go 1.22 or higher
-MySQL 8.0 or higher
-Git
+- Limit and market order support
+- Price-time priority matching
+- Real-time order book management
+- RESTful API interface
+- MySQL database for persistence
+- Transaction support for atomic operations
+- Concurrent order processing with mutex locks
 
-Setup
+## Prerequisites
 
-Clone the repository:
-git clone <repository-url>
+- Go 1.21 or higher
+- MySQL 8.0 or higher
+- Docker (optional, for containerized deployment)
+
+## Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/order-matching-system.git
 cd order-matching-system
+```
 
-
-Install dependencies:
+2. Install dependencies:
+```bash
 go mod download
+```
 
+3. Set up the database:
+```bash
+# Create the database
+mysql -u root -p -e "CREATE DATABASE order_matching_system;"
 
-Set up environment:Create a .env file in the root directory:
-DB_DSN=user:password@tcp(localhost:3306)/order_matching?parseTime=true
-SERVER_ADDR=:8080
+# Run migrations
+go run cmd/migrate/main.go
+```
 
+4. Configure the environment:
+```bash
+cp .env.example .env
+# Edit .env with your database credentials and other settings
+```
 
-Set up MySQL:
+5. Run the server:
+```bash
+go run cmd/server/main.go
+```
 
-Create a database named order_matching.
-Run the schema script:mysql -u user -p order_matching < sql/schema.sql
+## API Endpoints
 
+### Orders
 
+#### Place Order
+```http
+POST /api/v1/orders
+Content-Type: application/json
 
-
-Build and run:
-go build -o order-matching-system ./cmd/server
-./order-matching-system
-
-The server runs on http://localhost:8080 (or as specified in .env).
-
-
-API Endpoints
-All endpoints consume/produce JSON.
-Place Order
-
-POST /orders
-Request Body:{
-    "symbol": "BTCUSD",
+{
+    "symbol": "BTC-USD",
     "side": "buy",
     "type": "limit",
-    "price": 50000.00,
-    "quantity": 1.5
+    "price": 50000,
+    "quantity": 1
 }
+```
 
+#### Get Order
+```http
+GET /api/v1/orders/{order_id}
+```
 
-Response (200 OK):{
-    "order_id": 123456,
-    "status": "open",
-    "trades": []
-}
+#### Cancel Order
+```http
+DELETE /api/v1/orders/{order_id}
+```
 
+### Order Book
 
-cURL:curl -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{"symbol":"BTCUSD","side":"buy","type":"limit","price":50000.00,"quantity":1.5}'
+#### Get Order Book
+```http
+GET /api/v1/orderbook/{symbol}
+```
 
+### Trades
 
+#### Get Trades
+```http
+GET /api/v1/trades/{symbol}
+```
 
-Cancel Order
+## Order Types
 
-DELETE /orders/{orderId}
-Response (200 OK):{"message": "Order canceled"}
+### Limit Orders
+- Specify both price and quantity
+- Match against existing orders at the specified price or better
+- Remain in the order book if not fully matched
 
+### Market Orders
+- Specify only quantity
+- Match against existing limit orders at the best available price
+- Execute immediately at the best available price
+- Cancel if not fully matched
 
-cURL:curl -X DELETE http://localhost:8080/orders/123456
+## Matching Rules
 
+1. Price-Time Priority
+   - Orders are matched first by price (best price first)
+   - Within the same price level, orders are matched by time (first in, first out)
 
+2. Matching Process
+   - Buy orders match against the lowest ask price
+   - Sell orders match against the highest bid price
+   - Market orders match against the best available price
+   - Partial fills are supported
 
-Query Order Book
+## Database Schema
 
-GET /orderbook?symbol={symbol}
-Response (200 OK):[
-    {
-        "order_id": 123456,
-        "symbol": "BTCUSD",
-        "side": "buy",
-        "type": "limit",
-        "price": 50000.00,
-        "initial_quantity": 1.5,
-        "remaining_quantity": 1.5,
-        "status": "open",
-        "created_at": "2025-05-29T11:07:00Z"
-    }
-]
+### Orders Table
+```sql
+CREATE TABLE orders (
+    order_id BIGINT PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    side ENUM('buy', 'sell') NOT NULL,
+    type ENUM('limit', 'market') NOT NULL,
+    price DECIMAL(20,8),
+    initial_quantity DECIMAL(20,8) NOT NULL,
+    remaining_quantity DECIMAL(20,8) NOT NULL,
+    status ENUM('open', 'filled', 'canceled') NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    INDEX idx_symbol_status (symbol, status)
+);
+```
 
+### Trades Table
+```sql
+CREATE TABLE trades (
+    trade_id BIGINT PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    buy_order_id BIGINT NOT NULL,
+    sell_order_id BIGINT NOT NULL,
+    price DECIMAL(20,8) NOT NULL,
+    quantity DECIMAL(20,8) NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    FOREIGN KEY (buy_order_id) REFERENCES orders(order_id),
+    FOREIGN KEY (sell_order_id) REFERENCES orders(order_id),
+    CHECK (price > 0),
+    CHECK (quantity > 0)
+);
+```
 
-cURL:curl http://localhost:8080/orderbook?symbol=BTCUSD
+## Example Usage
 
-
-
-List Trades
-
-GET /trades?symbol={symbol}
-Response (200 OK):[
-    {
-        "trade_id": 1,
-        "symbol": "BTCUSD",
-        "buy_order_id": 123456,
-        "sell_order_id": 123457,
-        "price": 50000.00,
-        "quantity": 1.0,
-        "created_at": "2025-05-29T11:07:00Z"
-    }
-]
-
-
-cURL:curl http://localhost:8080/trades?symbol=BTCUSD
-
-
-
-Get Order Status
-
-GET /orders/{orderId}
-Response (200 OK):{
-    "order_id": 123456,
-    "symbol": "BTCUSD",
-    "side": "buy",
+### Place a Limit Sell Order
+```bash
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "BTC-USD",
+    "side": "sell",
     "type": "limit",
-    "price": 50000.00,
-    "initial_quantity": 1.5,
-    "remaining_quantity": 1.5,
-    "status": "open",
-    "created_at": "2025-05-29T11:07:00Z"
-}
+    "price": 50000,
+    "quantity": 1
+  }'
+```
 
+### Place a Market Buy Order
+```bash
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "type": "market",
+    "quantity": 1
+  }'
+```
 
-cURL:curl http://localhost:8080/orders/123456
+### Get Order Book
+```bash
+curl http://localhost:8080/api/v1/orderbook/BTC-USD
+```
 
+## Error Handling
 
+The system handles various error conditions:
+- Invalid order parameters
+- Insufficient liquidity
+- Database errors
+- Concurrent order processing conflicts
 
-Design Decisions
+## Performance Considerations
 
-Package Structure: Organized into cmd, internal (with api, models, repository, service, config) for encapsulation and modularity.
-Repository Pattern: Separates database logic from business logic.
-Logging: Uses Zap for structured logging.
-Configuration: Environment variables via .env file for flexibility.
-Error Handling: Custom errors (ErrInvalidOrder, etc.) for clarity.
-Validation: Stricter input validation using Gin's binding (e.g., alphanum for symbol, required_if for price).
+- In-memory order book for fast matching
+- Database transactions for data consistency
+- Mutex locks for concurrent access
+- Efficient price-time priority sorting
 
-Assumptions
+## Contributing
 
-Sequential order processing (single-threaded for simplicity).
-Symbol names are alphanumeric and up to 10 characters.
-Prices and quantities use DECIMAL(10,2) for precision.
-MySQL runs locally on port 3306 unless specified in .env.
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request
 
-Future Improvements
+## License
 
-Add unit tests for service and repository layers.
-Implement connection pooling and retry mechanisms for database.
-Optimize order book for high-performance matching.
-Add authentication for API endpoints.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
